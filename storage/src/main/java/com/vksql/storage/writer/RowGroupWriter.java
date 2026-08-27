@@ -23,10 +23,15 @@ public class RowGroupWriter {
 
     public void writeRow(Object... values) {
         for (int i = 0; i < values.length; i++) {
-            switch (schema.column(i).type()) {
-                case INT32 -> chunkWriters.get(i).writeInt32((int) values[i]);
-                case INT64 -> chunkWriters.get(i).writeInt64((long) values[i]);
-                case FLOAT64 -> chunkWriters.get(i).writeFloat64((double) values[i]);
+            if (values[i] == null) {
+                chunkWriters.get(i).writeNull();
+            } else {
+                switch (schema.column(i).type()) {
+                    case INT32 -> chunkWriters.get(i).writeInt32((int) values[i]);
+                    case INT64 -> chunkWriters.get(i).writeInt64((long) values[i]);
+                    case FLOAT64 -> chunkWriters.get(i).writeFloat64((double) values[i]);
+                    case STRING -> chunkWriters.get(i).writeString((String) values[i]);
+                }
             }
         }
         currentCount++;

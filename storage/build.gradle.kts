@@ -20,4 +20,5 @@ java {
 
 tasks.test {
     useJUnitPlatform()
+    maxHeapSize = "512m"
 }
