@@ -261,4 +261,53 @@ class BenchmarkTest {
         System.out.println("                     " + (rowsPerSec / 1_000_000) + "M rows/sec");
         System.out.println("Data skipped:        " + (scan.getSkippedRowGroups() * 100 / scan.getTotalRowGroups()) + "%");
     }
+
+    @Test
+    void benchmark_100M_rows_all_approaches() throws Exception {
+        Schema schema = new Schema(List.of(
+            new ColumnDescriptor("id", DataType.INT32, 0),
+            new ColumnDescriptor("price", DataType.INT64, 1),
+            new ColumnDescriptor("nation", DataType.INT32, 2)
+        ));
+
+        int numRows = 100_000_000;
+        Path filePath = tempDir.resolve("bench_100m.vkql");
+
+        System.out.println("Writing " + (numRows / 1_000_000) + "M rows...");
+        long writeStart = System.nanoTime();
+        try (var writer = new VksqlFileWriter(filePath, schema)) {
+            for (int i = 0; i < numRows; i++) {
+                writer.writeRow(i, (long) (i % 500), i % 10);
+            }
+        }
+        long writeMs = (System.nanoTime() - writeStart) / 1_000_000;
+        System.out.println("Write time: " + writeMs + " ms (" + (numRows / Math.max(writeMs, 1)) + "K rows/sec)");
+
+        // 1. Mapped + Vectorized (single-threaded)
+        System.out.println("\n--- Mapped + Vectorized (single-thread) ---");
+        long t1 = System.nanoTime();
+        var scan1 = new com.vksql.execution.vectorized.MappedVectorizedScanOperator(filePath, schema);
+        var filter1 = new com.vksql.execution.vectorized.VectorizedFilterOperator(scan1,
+            new ComparisonExpr(new ColumnRef("price"), ">", new IntLiteral(250)),
+            schema);
+        var agg1 = new com.vksql.execution.vectorized.VectorizedHashAggregateOperator(filter1, schema, 2, 1, "sum");
+        agg1.open();
+        while (agg1.next() != null) {}
+        agg1.close();
+        long ms1 = (System.nanoTime() - t1) / 1_000_000;
+        System.out.println("Time: " + ms1 + " ms → " + (numRows * 1000L / Math.max(ms1, 1) / 1_000_000) + "M rows/sec");
+
+        // 2. Parallel (multi-threaded)
+        System.out.println("\n--- Parallel (10 cores) ---");
+        long t2 = System.nanoTime();
+        var executor = new com.vksql.execution.vectorized.ParallelQueryExecutor(filePath, schema);
+        executor.parallelFilterAggregate(1, 250, 2, 1);
+        long ms2 = (System.nanoTime() - t2) / 1_000_000;
+        System.out.println("Time: " + ms2 + " ms → " + (numRows * 1000L / Math.max(ms2, 1) / 1_000_000) + "M rows/sec");
+
+        System.out.println("\n=== 100M ROW SUMMARY ===");
+        System.out.println("Mapped+Vectorized: " + (numRows * 1000L / Math.max(ms1, 1) / 1_000_000) + "M rows/sec");
+        System.out.println("Parallel (10 cores): " + (numRows * 1000L / Math.max(ms2, 1) / 1_000_000) + "M rows/sec");
+        System.out.println("DuckDB reference: ~1000M rows/sec");
+    }
 }
