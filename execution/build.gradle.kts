@@ -26,6 +26,13 @@ tasks.withType<JavaCompile> {
 
 tasks.test {
     useJUnitPlatform()
-    maxHeapSize = "512m"
-    jvmArgs("--enable-preview")
+    maxHeapSize = "2g"
+    jvmArgs(
+        "--enable-preview",
+        "-XX:+UseZGC",              // Low-pause garbage collector
+        "-XX:+AlwaysPreTouch",      // Pre-touch heap pages (avoid page faults during execution)
+        "-XX:-TieredCompilation",   // Skip interpreter, go straight to C2 JIT
+        "-XX:CompileThreshold=100", // JIT earlier
+        "-Djdk.incubator.vector.VECTOR_ACCESS_OOB_CHECK=0" // Disable bounds checks for vector ops
+    )
 }

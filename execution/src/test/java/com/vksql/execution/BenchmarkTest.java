@@ -26,7 +26,7 @@ class BenchmarkTest {
             new ColumnDescriptor("nation", DataType.INT32, 2)
         ));
 
-        int numRows = 500_000;
+        int numRows = 10_000_000;
         Path filePath = tempDir.resolve("bench.vkql");
 
         // Write 1M rows
@@ -81,7 +81,7 @@ class BenchmarkTest {
             new ColumnDescriptor("nation", DataType.INT32, 2)
         ));
 
-        int numRows = 500_000;
+        int numRows = 10_000_000;
         Path filePath = tempDir.resolve("bench_vec.vkql");
 
         // Write same data
@@ -129,7 +129,7 @@ class BenchmarkTest {
             new ColumnDescriptor("nation", DataType.INT32, 2)
         ));
 
-        int numRows = 500_000;
+        int numRows = 10_000_000;
         Path filePath = tempDir.resolve("bench_mapped.vkql");
 
         try (var writer = new VksqlFileWriter(filePath, schema)) {
@@ -176,7 +176,7 @@ class BenchmarkTest {
             new ColumnDescriptor("nation", DataType.INT32, 2)
         ));
 
-        int numRows = 500_000;
+        int numRows = 10_000_000;
         Path filePath = tempDir.resolve("bench_parallel.vkql");
 
         try (var writer = new VksqlFileWriter(filePath, schema)) {
