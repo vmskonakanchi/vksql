@@ -24,7 +24,7 @@ import java.util.Map;
 public class Worker {
 
     private final String workerId;
-    private final Path dataDirectory;  // where this worker's .vkql files live
+    private final Path dataDirectory; // where this worker's .vkql files live
     private final int port;
     private final String coordinatorAddress;
 
@@ -47,18 +47,19 @@ public class Worker {
      * Execute a task locally using the vectorized execution engine.
      * Builds an operator chain: Scan → Filter → HashAggregate.
      *
-     * @param tableName      name of the table (maps to dataDirectory/tableName.vkql)
-     * @param filterColumn   column name to filter on
-     * @param filterOp       comparison operator (">", "<", ">=", "<=", "=", "!=")
-     * @param filterValue    value to compare against
+     * @param tableName       name of the table (maps to
+     *                        dataDirectory/tableName.vkql)
+     * @param filterColumn    column name to filter on
+     * @param filterOp        comparison operator (">", "<", ">=", "<=", "=", "!=")
+     * @param filterValue     value to compare against
      * @param groupByColIndex column index to group by
-     * @param aggColIndex    column index to aggregate
-     * @param aggFunction    aggregate function name ("sum", "count", etc.)
+     * @param aggColIndex     column index to aggregate
+     * @param aggFunction     aggregate function name ("sum", "count", etc.)
      * @return Map of groupKey → aggregated value
      */
     public Map<Object, Long> executeTask(String tableName, String filterColumn, String filterOp,
-                                          long filterValue, int groupByColIndex, int aggColIndex,
-                                          String aggFunction) {
+            long filterValue, int groupByColIndex, int aggColIndex,
+            String aggFunction) {
         Path filePath = dataDirectory.resolve(tableName + ".vkql");
 
         // 1. Read schema from file footer
@@ -70,7 +71,8 @@ public class Worker {
         } catch (IOException e) {
             throw new RuntimeException("Failed to read schema from: " + filePath, e);
         } finally {
-            if (footerReader != null) footerReader.close();
+            if (footerReader != null)
+                footerReader.close();
         }
 
         // 2. Build operator chain: Scan → Filter → Aggregate
@@ -79,13 +81,11 @@ public class Worker {
         ComparisonExpr condition = new ComparisonExpr(
                 new ColumnRef(filterColumn),
                 filterOp,
-                new IntLiteral(filterValue)
-        );
+                new IntLiteral(filterValue));
         VectorizedFilterOperator filter = new VectorizedFilterOperator(scan, condition, schema);
 
         VectorizedHashAggregateOperator aggregate = new VectorizedHashAggregateOperator(
-                filter, schema, groupByColIndex, aggColIndex, aggFunction
-        );
+                filter, schema, groupByColIndex, aggColIndex, aggFunction);
 
         // 3. Execute and collect all result batches
         Map<Object, Long> results = new HashMap<>();
@@ -118,6 +118,11 @@ public class Worker {
         return results;
     }
 
-    public String getWorkerId() { return workerId; }
-    public Path getDataDirectory() { return dataDirectory; }
+    public String getWorkerId() {
+        return workerId;
+    }
+
+    public Path getDataDirectory() {
+        return dataDirectory;
+    }
 }
