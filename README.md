@@ -1,35 +1,118 @@
 # vkSQL
 
-A distributed analytical query engine built from scratch in Java 21.
-
-Columnar storage, vectorized execution, distributed query planning — designed to run TPC-H queries across multiple nodes.
+A distributed analytical query engine built from scratch in Java 21 — columnar storage, vectorized execution, and distributed query planning designed to run TPC-H queries across multiple nodes.
 
 ## Architecture
 
 ```
-SQL → Parser → Logical Plan → Optimizer → Physical Plan → Vectorized Executor
-                                                              ↓
-                                              Columnar Storage (custom format)
+                            ┌─────────────────────────────────────────────┐
+                            │            Distributed Path                  │
+                            │                                             │
+                            │   ┌─────────────┐    ┌─────────────────┐   │
+                            │   │ Coordinator │───▶│  Worker Nodes   │   │
+                            │   └─────────────┘    │  (gRPC shuffle) │   │
+                            │         │            └─────────────────┘   │
+                            └─────────┼───────────────────────────────────┘
+                                      │
+┌──────┐    ┌────────┐    ┌───────────▼───┐    ┌───────────┐    ┌──────────┐
+│  SQL │───▶│ Parser │───▶│ Logical Plan  │───▶│ Optimizer │───▶│ Physical │
+└──────┘    │(ANTLR4)│    │               │    │           │    │   Plan   │
+            └────────┘    └───────────────┘    └───────────┘    └────┬─────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌─────────────────────┐
+                                                          │ Vectorized Executor │
+                                                          │  (batch processing) │
+                                                          └──────────┬──────────┘
+                                                                     │
+                                                                     ▼
+                                                          ┌─────────────────────┐
+                                                          │  Columnar Storage   │
+                                                          │ (custom .vkql fmt)  │
+                                                          └─────────────────────┘
 ```
+
+## Key Features
+
+- **Columnar storage with zone maps** — min/max statistics per page for predicate pushdown
+- **Vectorized execution** — batch-oriented processing operating on column vectors
+- **Memory-mapped I/O** — zero-copy reads via Panama `MemorySegment` (Java 21 FFM API)
+- **Parallel execution** — multi-threaded scan and aggregation with virtual threads
+- **Hash join / aggregate** — in-memory hash-based operators for analytical queries
+- **Predicate pushdown** — skip row groups and pages using zone map statistics
+- **gRPC distributed execution** — shuffle data across worker nodes for distributed joins
+- **Fault tolerance** — retry logic and partition reassignment on worker failure
+- **Compression** — Snappy (fast) and Zstd (high ratio) block compression
+- **Encoding** — Dictionary, RLE, and Delta encoding for columnar data
+
+## Performance
+
+Benchmark on 100M rows, single-node, Apple Silicon:
+
+| Metric | Throughput |
+|--------|-----------|
+| Single-thread scan + aggregate | **2.8 billion rows/sec** |
+| Parallel execution (all cores) | **4.5 billion rows/sec** |
+
+See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for detailed methodology and results.
+
+## Quick Start
+
+```bash
+# Build
+./gradlew build
+
+# Run all tests
+./gradlew test
+
+# Run storage module tests
+./gradlew :storage:test
+
+# Run execution engine tests
+./gradlew :execution:test
+
+# Run parser tests
+./gradlew :parser:test
+```
+
+Requires **Java 21+** and **Gradle 9.7+** (wrapper included).
 
 ## Modules
 
-- **storage** — Custom columnar file format with row groups, pages, min/max stats, and predicate pushdown
-- **parser** — SQL parsing and AST generation (coming soon)
-- **planner** — Logical/physical plan optimization (coming soon)
-- **execution** — Vectorized batch execution engine (coming soon)
-- **network** — gRPC shuffle for distributed execution (coming soon)
+| Module | Description |
+|--------|-------------|
+| `storage` | Custom columnar file format — row groups, pages, null bitmaps, encoding, compression, zone maps, memory-mapped reader |
+| `parser` | SQL parsing via ANTLR4 — lexer, parser, AST generation, visitor pattern for plan building |
+| `execution` | Vectorized batch execution engine — operators (scan, filter, project, join, aggregate), RecordBatch, expression evaluation |
+| `network` | gRPC-based distributed execution — protobuf schemas, shuffle service, coordinator/worker protocol, partition assignment |
 
-## Build & Test
+## Tech Stack
 
-```bash
-./gradlew build
-./gradlew :storage:test
-```
+| Component | Technology |
+|-----------|-----------|
+| Language | Java 21 (preview features enabled) |
+| Build | Gradle 9.7 (Kotlin DSL) |
+| SQL Parsing | ANTLR4 |
+| Distributed | gRPC + Protocol Buffers |
+| Compression | Snappy, Zstd |
+| Memory | Panama Foreign Function & Memory API (`MemorySegment`) |
+| Concurrency | Virtual Threads (Project Loom) |
+| GC | ZGC (low-latency, concurrent) |
 
-## Status
+## Project Status
 
-- [x] Phase 1: Columnar storage engine (writer, reader, footer, stats)
-- [ ] Phase 2: Query execution engine
-- [ ] Phase 3: Distributed execution
-- [ ] Phase 4: AI/ML extensions (vector search, HNSW)
+- [x] **Phase 1** — Columnar storage engine (writer, reader, footer, stats, encoding, compression)
+- [x] **Phase 2** — Query execution engine (operators, vectorized batches, hash join/aggregate)
+- [x] **Phase 3** — SQL parser (ANTLR4 grammar, AST, plan generation)
+- [x] **Phase 4** — Distributed execution (gRPC, coordinator/worker, shuffle, fault tolerance)
+- [ ] **Phase 5** — TPC-H benchmark suite (full query coverage)
+- [ ] **Phase 6** — AI/ML extensions (vector search, HNSW indexing)
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — system design, data flow, storage format, execution model
+- [Benchmarks](docs/BENCHMARKS.md) — performance results, methodology, comparisons
+
+## License
+
+[MIT](LICENSE)
