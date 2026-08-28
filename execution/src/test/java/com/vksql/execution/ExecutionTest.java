@@ -270,4 +270,78 @@ class ExecutionTest {
 
         assertEquals(2, results.size());
     }
+
+    private Path writeSortOrdersTable(Schema schema) throws Exception {
+        Path filePath = tempDir.resolve("orders_sort.vkql");
+        try (var writer = new VksqlFileWriter(filePath, schema)) {
+            writer.writeRow(1, 50L,  10);
+            writer.writeRow(2, 300L, 20);
+            writer.writeRow(3, 150L, 5);
+            writer.writeRow(4, 200L, 15);
+            writer.writeRow(5, 80L,  8);
+        }
+        return filePath;
+    }
+
+    @Test
+    void sortRows_ascending() throws Exception {
+        Schema schema = ordersSchema();
+        Path filePath = writeSortOrdersTable(schema);
+
+        // Scan → Sort(price ASC)
+        Operator scan = new ScanOperator(filePath, schema);
+        Operator sort = new SortOperator(scan, List.of(new SortKey(1, true)));
+
+        sort.open();
+        List<Row> results = new ArrayList<>();
+        Row row;
+        while ((row = sort.next()) != null) {
+            results.add(row);
+        }
+        sort.close();
+
+        // Prices should be: 50, 80, 150, 200, 300
+        assertEquals(5, results.size());
+        assertEquals(50L,  results.get(0).get(1));
+        assertEquals(80L,  results.get(1).get(1));
+        assertEquals(150L, results.get(2).get(1));
+        assertEquals(200L, results.get(3).get(1));
+        assertEquals(300L, results.get(4).get(1));
+
+        System.out.println("=== Sort by price ASC ===");
+        for (Row r : results) {
+            System.out.println("  " + r);
+        }
+    }
+
+    @Test
+    void sortRows_descending() throws Exception {
+        Schema schema = ordersSchema();
+        Path filePath = writeSortOrdersTable(schema);
+
+        // Scan → Sort(price DESC)
+        Operator scan = new ScanOperator(filePath, schema);
+        Operator sort = new SortOperator(scan, List.of(new SortKey(1, false)));
+
+        sort.open();
+        List<Row> results = new ArrayList<>();
+        Row row;
+        while ((row = sort.next()) != null) {
+            results.add(row);
+        }
+        sort.close();
+
+        // Prices should be: 300, 200, 150, 80, 50
+        assertEquals(5, results.size());
+        assertEquals(300L, results.get(0).get(1));
+        assertEquals(200L, results.get(1).get(1));
+        assertEquals(150L, results.get(2).get(1));
+        assertEquals(80L,  results.get(3).get(1));
+        assertEquals(50L,  results.get(4).get(1));
+
+        System.out.println("=== Sort by price DESC ===");
+        for (Row r : results) {
+            System.out.println("  " + r);
+        }
+    }
 }

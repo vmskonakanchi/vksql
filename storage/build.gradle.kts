@@ -7,6 +7,9 @@ repositories {
 }
 
 dependencies {
+    implementation("org.xerial.snappy:snappy-java:1.1.10.5")
+    implementation("com.github.luben:zstd-jni:1.5.5-11")
+
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

@@ -31,6 +31,10 @@ public class WorkerRegistry {
             .toList();
     }
 
+    public List<WorkerInfo> getAllWorkers() {
+        return List.copyOf(workers.values());
+    }
+
     public void markDead(String workerId) {
         workers.remove(workerId);
     }
