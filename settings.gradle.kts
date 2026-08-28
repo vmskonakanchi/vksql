@@ -11,4 +11,4 @@ plugins {
 }
 
 rootProject.name = "vksql"
-include("storage")
+include("storage", "parser")
