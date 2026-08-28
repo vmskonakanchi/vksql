@@ -60,34 +60,27 @@ flowchart TD
 vkSQL uses a custom columnar file format (`.vkql`) optimized for analytical workloads:
 
 ```mermaid
-block-beta
-    columns 1
-
-    block:header["File Header"]
-        h1["Magic: VKQL | Version | Schema Info"]
+flowchart TD
+    subgraph File[".vkql File Layout"]
+        direction TB
+        H["Magic: VKQL (4 bytes)"]
+        subgraph RG0["Row Group 0 (1M rows)"]
+            C0["Column 0: Page 0 | Page 1 | ..."]
+            C1["Column 1: Page 0 | Page 1 | ..."]
+            C2["Column 2: Page 0 | Page 1 | ..."]
+        end
+        subgraph RG1["Row Group 1 (1M rows)"]
+            C3["Column 0 | Column 1 | Column 2"]
+        end
+        subgraph Footer["Footer (metadata)"]
+            F1["Schema: column names + types"]
+            F2["Row Group metadata: offset, size, row count"]
+            F3["Per-column stats: min, max, null count"]
+        end
+        FL["Footer Length (4 bytes)"]
+        M["Magic: VKQL (4 bytes)"]
     end
-
-    block:rg0["Row Group 0"]
-        c0["Column 0: Page 0 | Page 1 | ..."]
-        c1["Column 1: Page 0 | Page 1 | ..."]
-        c2["Column 2: Page 0 | Page 1 | ..."]
-    end
-
-    block:rg1["Row Group 1"]
-        c3["Column 0: Page 0 | Page 1 | ..."]
-        c4["Column 1: ..."]
-    end
-
-    block:rgn["... (more Row Groups)"]
-        dots["..."]
-    end
-
-    block:footer["Footer"]
-        f1["Schema (column names + types)"]
-        f2["Row Group metadata (offset, size, row count)"]
-        f3["Column metadata (page offsets, zone maps, null count, encoding, compression)"]
-        f4["Footer length (4 bytes) | Magic: VKQL (4 bytes)"]
-    end
+    H --> RG0 --> RG1 --> Footer --> FL --> M
 ```
 
 ### Page Structure
@@ -95,24 +88,14 @@ block-beta
 Each page contains a fixed number of values for a single column:
 
 ```mermaid
-block-beta
-    columns 1
-
-    block:ph["Page Header"]
-        ph1["Encoding | Compressed Size | Uncompressed Size | Null Count"]
+flowchart TD
+    subgraph Page["Page Structure (~64KB)"]
+        direction TB
+        PH["Bitmap Size (4 bytes)"]
+        NB["Null Bitmap: 1 bit per value"]
+        ED["Encoded Data: Dictionary / RLE / Delta / Plain"]
     end
-
-    block:nb["Null Bitmap"]
-        nb1["1 bit per row (0=null, 1=value)"]
-    end
-
-    block:ed["Encoded Data"]
-        ed1["Dictionary / RLE / Delta / Plain encoded values"]
-    end
-
-    block:comp["Compression (optional)"]
-        comp1["Compressed with Snappy or Zstd"]
-    end
+    PH --> NB --> ED
 ```
 
 ### Encoding Schemes
