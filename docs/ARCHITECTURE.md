@@ -4,89 +4,53 @@ Detailed technical architecture of vkSQL — a distributed analytical query engi
 
 ## System Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              vkSQL Engine                                    │
-│                                                                             │
-│  ┌─────────┐   ┌──────────┐   ┌───────────┐   ┌───────────┐   ┌────────┐ │
-│  │   SQL   │──▶│  Parser  │──▶│  Logical  │──▶│ Optimizer │──▶│Physical│ │
-│  │  Input  │   │ (ANTLR4) │   │   Plan    │   │           │   │  Plan  │ │
-│  └─────────┘   └──────────┘   └───────────┘   └───────────┘   └───┬────┘ │
-│                                                                     │      │
-│                                              ┌──────────────────────▼────┐ │
-│                                              │    Execution Engine       │ │
-│                                              │  ┌────────────────────┐  │ │
-│                                              │  │ Vectorized Operators│  │ │
-│                                              │  │ Scan │ Filter │ Join│  │ │
-│                                              │  │ Agg  │Project│ Sort│  │ │
-│                                              │  └─────────┬──────────┘  │ │
-│                                              └────────────┼─────────────┘ │
-│                                                           │               │
-│  ┌────────────────────────────┐    ┌─────────────────────▼─────────────┐ │
-│  │    Distributed Layer       │    │       Storage Engine               │ │
-│  │  ┌─────────────────────┐  │    │  ┌─────────┐  ┌───────────────┐  │ │
-│  │  │    Coordinator      │  │    │  │ Writer  │  │    Reader     │  │ │
-│  │  │  ┌──────┐ ┌──────┐ │  │    │  │         │  │  (mmap-based) │  │ │
-│  │  │  │Worker│ │Worker│ │  │    │  └─────────┘  └───────────────┘  │ │
-│  │  │  │  1   │ │  N   │ │  │    │  ┌─────────────────────────────┐  │ │
-│  │  │  └──────┘ └──────┘ │  │    │  │   Columnar File (.vkql)    │  │ │
-│  │  └─────────────────────┘  │    │  └─────────────────────────────┘  │ │
-│  └────────────────────────────┘    └───────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph vkSQL Engine
+        SQL[SQL Input] --> Parser[Parser<br/>ANTLR4]
+        Parser --> LP[Logical Plan]
+        LP --> Opt[Optimizer]
+        Opt --> PP[Physical Plan]
+        PP --> Exec[Execution Engine<br/>Vectorized Operators<br/>Scan · Filter · Join · Agg · Project · Sort]
+        Exec --> Storage[Storage Engine<br/>Columnar File .vkql<br/>mmap Reader / Writer]
+    end
+
+    subgraph Distributed Layer
+        Coord[Coordinator] -->|gRPC| W1[Worker 1<br/>Executor + Storage]
+        Coord -->|gRPC| W2[Worker 2<br/>Executor + Storage]
+        Coord -->|gRPC| WN[Worker N<br/>Executor + Storage]
+        W1 <-->|shuffle| W2
+        W2 <-->|shuffle| WN
+    end
 ```
 
 ## Data Flow
 
 ### Query Processing Pipeline
 
-```
-"SELECT sum(amount) FROM orders WHERE region = 'US'"
-    │
-    ▼
-┌──────────────────────────────────────┐
-│ 1. LEXER (ANTLR4)                    │
-│    SQL string → token stream         │
-│    [SELECT][sum][amount][FROM]...     │
-└──────────────────┬───────────────────┘
-                   ▼
-┌──────────────────────────────────────┐
-│ 2. PARSER (ANTLR4)                   │
-│    token stream → parse tree (CST)   │
-│    SelectStmt → SelectList → ...     │
-└──────────────────┬───────────────────┘
-                   ▼
-┌──────────────────────────────────────┐
-│ 3. AST BUILDER (Visitor)             │
-│    parse tree → abstract syntax tree │
-│    Query { projection, filter, ... } │
-└──────────────────┬───────────────────┘
-                   ▼
-┌──────────────────────────────────────┐
-│ 4. LOGICAL PLAN                      │
-│    AST → relational algebra tree     │
-│    Aggregate(Filter(Scan(orders)))   │
-└──────────────────┬───────────────────┘
-                   ▼
-┌──────────────────────────────────────┐
-│ 5. OPTIMIZER                         │
-│    Predicate pushdown                │
-│    Projection pruning                │
-│    Join reordering                   │
-└──────────────────┬───────────────────┘
-                   ▼
-┌──────────────────────────────────────┐
-│ 6. PHYSICAL PLAN                     │
-│    Choose operator implementations   │
-│    HashAggregate(Scan(orders,        │
-│      filter=region='US'))            │
-└──────────────────┬───────────────────┘
-                   ▼
-┌──────────────────────────────────────┐
-│ 7. EXECUTION                         │
-│    Vectorized batch processing       │
-│    RecordBatch (1024 rows) at a time │
-│    → Result: sum = 4,521,300         │
-└──────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Q["SQL: SELECT sum(amount) FROM orders WHERE region = 'US'"] --> Lexer
+
+    Lexer["1. LEXER (ANTLR4)<br/>SQL string → token stream<br/>[SELECT][sum][amount][FROM]..."]
+    Lexer --> ParserStep
+
+    ParserStep["2. PARSER (ANTLR4)<br/>token stream → parse tree (CST)<br/>SelectStmt → SelectList → ..."]
+    ParserStep --> AST
+
+    AST["3. AST BUILDER (Visitor)<br/>parse tree → abstract syntax tree<br/>Query { projection, filter, ... }"]
+    AST --> LogicalPlan
+
+    LogicalPlan["4. LOGICAL PLAN<br/>AST → relational algebra tree<br/>Aggregate(Filter(Scan(orders)))"]
+    LogicalPlan --> Optimizer
+
+    Optimizer["5. OPTIMIZER<br/>Predicate pushdown<br/>Projection pruning<br/>Join reordering"]
+    Optimizer --> PhysicalPlan
+
+    PhysicalPlan["6. PHYSICAL PLAN<br/>Choose operator implementations<br/>HashAggregate(Scan(orders, filter=region='US'))"]
+    PhysicalPlan --> Execution
+
+    Execution["7. EXECUTION<br/>Vectorized batch processing<br/>RecordBatch (1024 rows) at a time<br/>→ Result: sum = 4,521,300"]
 ```
 
 ## Storage Format
@@ -95,63 +59,60 @@ Detailed technical architecture of vkSQL — a distributed analytical query engi
 
 vkSQL uses a custom columnar file format (`.vkql`) optimized for analytical workloads:
 
-```
-┌───────────────────────────────────────────┐
-│              File Header                   │
-│  Magic: "VKQL" │ Version │ Schema Info    │
-├───────────────────────────────────────────┤
-│              Row Group 0                   │
-│  ┌─────────────────────────────────────┐  │
-│  │  Column 0: Page 0 │ Page 1 │ ...    │  │
-│  │  Column 1: Page 0 │ Page 1 │ ...    │  │
-│  │  Column 2: Page 0 │ Page 1 │ ...    │  │
-│  └─────────────────────────────────────┘  │
-├───────────────────────────────────────────┤
-│              Row Group 1                   │
-│  ┌─────────────────────────────────────┐  │
-│  │  Column 0: Page 0 │ Page 1 │ ...    │  │
-│  │  ...                                │  │
-│  └─────────────────────────────────────┘  │
-├───────────────────────────────────────────┤
-│              ...                          │
-├───────────────────────────────────────────┤
-│              Footer                       │
-│  ┌─────────────────────────────────────┐  │
-│  │  Schema (column names + types)      │  │
-│  │  Row Group metadata                 │  │
-│  │    - offset, size, row count        │  │
-│  │  Column metadata per row group      │  │
-│  │    - page offsets                   │  │
-│  │    - zone maps (min/max)            │  │
-│  │    - null count                     │  │
-│  │    - encoding type                  │  │
-│  │    - compression type               │  │
-│  │  Footer length (4 bytes)            │  │
-│  │  Magic: "VKQL" (4 bytes)           │  │
-│  └─────────────────────────────────────┘  │
-└───────────────────────────────────────────┘
+```mermaid
+block-beta
+    columns 1
+
+    block:header["File Header"]
+        h1["Magic: VKQL | Version | Schema Info"]
+    end
+
+    block:rg0["Row Group 0"]
+        c0["Column 0: Page 0 | Page 1 | ..."]
+        c1["Column 1: Page 0 | Page 1 | ..."]
+        c2["Column 2: Page 0 | Page 1 | ..."]
+    end
+
+    block:rg1["Row Group 1"]
+        c3["Column 0: Page 0 | Page 1 | ..."]
+        c4["Column 1: ..."]
+    end
+
+    block:rgn["... (more Row Groups)"]
+        dots["..."]
+    end
+
+    block:footer["Footer"]
+        f1["Schema (column names + types)"]
+        f2["Row Group metadata (offset, size, row count)"]
+        f3["Column metadata (page offsets, zone maps, null count, encoding, compression)"]
+        f4["Footer length (4 bytes) | Magic: VKQL (4 bytes)"]
+    end
 ```
 
 ### Page Structure
 
 Each page contains a fixed number of values for a single column:
 
-```
-┌──────────────────────────────────┐
-│         Page Header              │
-│  Encoding │ Compressed Size │    │
-│  Uncompressed Size │ Null Count │
-├──────────────────────────────────┤
-│         Null Bitmap              │
-│  1 bit per row (0=null, 1=value) │
-├──────────────────────────────────┤
-│         Encoded Data             │
-│  (Dictionary / RLE / Delta /     │
-│   Plain encoded values)          │
-├──────────────────────────────────┤
-│  Optional: Compressed with       │
-│  Snappy or Zstd                  │
-└──────────────────────────────────┘
+```mermaid
+block-beta
+    columns 1
+
+    block:ph["Page Header"]
+        ph1["Encoding | Compressed Size | Uncompressed Size | Null Count"]
+    end
+
+    block:nb["Null Bitmap"]
+        nb1["1 bit per row (0=null, 1=value)"]
+    end
+
+    block:ed["Encoded Data"]
+        ed1["Dictionary / RLE / Delta / Plain encoded values"]
+    end
+
+    block:comp["Compression (optional)"]
+        comp1["Compressed with Snappy or Zstd"]
+    end
 ```
 
 ### Encoding Schemes
@@ -202,17 +163,16 @@ public interface PhysicalOperator {
 }
 ```
 
-**Operator tree example:**
+**Operator tree (pull-based pipeline):**
 
+```mermaid
+flowchart BT
+    Scan["TableScan [orders]<br/>mmap + zone map pruning"] -->|"next()"| Filter
+    Filter["Filter [amount > 100]"] -->|"next()"| Agg
+    Agg["HashAggregate<br/>[sum(amount), group by region]"]
 ```
-HashAggregate [sum(amount), group by region]
-    │
-    ▼
-  Filter [amount > 100]
-    │
-    ▼
-  TableScan [orders] (mmap + zone map pruning)
-```
+
+> Each operator pulls batches from its child by calling `next()`. Data flows upward from scan to the root operator.
 
 ### RecordBatch
 
@@ -247,38 +207,111 @@ RecordBatch (1024 rows):
 
 ### Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   Coordinator                        │
-│  ┌───────────────────────────────────────────────┐  │
-│  │  Query Planning + Fragment Distribution        │  │
-│  │  Partition Assignment + Result Aggregation     │  │
-│  └───────────────────────────────────────────────┘  │
-└────────────────────────┬────────────────────────────┘
-                         │ gRPC
-         ┌───────────────┼───────────────┐
-         ▼               ▼               ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│   Worker 1   │ │   Worker 2   │ │   Worker N   │
-│ ┌──────────┐ │ │ ┌──────────┐ │ │ ┌──────────┐ │
-│ │ Executor │ │ │ │ Executor │ │ │ │ Executor │ │
-│ │ (local)  │ │ │ │ (local)  │ │ │ │ (local)  │ │
-│ └──────────┘ │ │ └──────────┘ │ │ └──────────┘ │
-│ ┌──────────┐ │ │ ┌──────────┐ │ │ ┌──────────┐ │
-│ │ Storage  │ │ │ │ Storage  │ │ │ │ Storage  │ │
-│ │ (local)  │ │ │ │ (local)  │ │ │ │ (local)  │ │
-│ └──────────┘ │ │ └──────────┘ │ │ └──────────┘ │
-└──────────────┘ └──────────────┘ └──────────────┘
+```mermaid
+flowchart TD
+    subgraph Coordinator
+        QP[Query Planning + Fragment Distribution]
+        PA[Partition Assignment + Result Aggregation]
+    end
+
+    Coordinator -->|gRPC| W1
+    Coordinator -->|gRPC| W2
+    Coordinator -->|gRPC| WN
+
+    subgraph W1[Worker 1]
+        E1[Executor<br/>local]
+        S1[Storage<br/>local]
+    end
+
+    subgraph W2[Worker 2]
+        E2[Executor<br/>local]
+        S2[Storage<br/>local]
+    end
+
+    subgraph WN[Worker N]
+        EN[Executor<br/>local]
+        SN[Storage<br/>local]
+    end
+
+    W1 <-->|shuffle| W2
+    W2 <-->|shuffle| WN
+    W1 <-->|shuffle| WN
 ```
 
 ### Query Execution Flow (Distributed)
 
-1. **Parse & Plan** — Coordinator parses SQL, generates physical plan
-2. **Fragment** — Plan is split into fragments based on data partitioning
-3. **Assign** — Fragments assigned to workers based on data locality
-4. **Execute** — Workers execute fragments in parallel on local data
-5. **Shuffle** — Intermediate results shuffled between workers (hash-partitioned)
-6. **Aggregate** — Coordinator collects partial results, produces final output
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Coordinator
+    participant Worker1 as Worker 1
+    participant Worker2 as Worker 2
+    participant WorkerN as Worker N
+
+    Client->>Coordinator: SQL Query
+    Coordinator->>Coordinator: Parse & Plan (physical plan)
+    Coordinator->>Coordinator: Fragment plan by partitions
+
+    par Assign & Execute
+        Coordinator->>Worker1: Fragment A (partitions 0-3)
+        Coordinator->>Worker2: Fragment B (partitions 4-7)
+        Coordinator->>WorkerN: Fragment C (partitions 8-11)
+    end
+
+    par Local Execution
+        Worker1->>Worker1: Execute on local data
+        Worker2->>Worker2: Execute on local data
+        WorkerN->>WorkerN: Execute on local data
+    end
+
+    par Shuffle (hash-partitioned)
+        Worker1->>Worker2: Shuffle intermediate results
+        Worker2->>WorkerN: Shuffle intermediate results
+        WorkerN->>Worker1: Shuffle intermediate results
+    end
+
+    Worker1->>Coordinator: Partial result
+    Worker2->>Coordinator: Partial result
+    WorkerN->>Coordinator: Partial result
+
+    Coordinator->>Coordinator: Aggregate final result
+    Coordinator->>Client: Final result
+```
+
+### Distributed Execution Stages
+
+```mermaid
+flowchart LR
+    subgraph Stage1[Stage 1: Scan + Filter]
+        S1[Scan Partition 0-3]
+        S2[Scan Partition 4-7]
+        S3[Scan Partition 8-11]
+    end
+
+    subgraph Exchange[Exchange Operator<br/>Hash Repartition on Join Key]
+        EX[gRPC Shuffle]
+    end
+
+    subgraph Stage2[Stage 2: Join + Aggregate]
+        J1[HashJoin + Agg<br/>Key Group 0]
+        J2[HashJoin + Agg<br/>Key Group 1]
+        J3[HashJoin + Agg<br/>Key Group 2]
+    end
+
+    subgraph Final[Final Stage]
+        Merge[Merge Results]
+    end
+
+    S1 --> EX
+    S2 --> EX
+    S3 --> EX
+    EX --> J1
+    EX --> J2
+    EX --> J3
+    J1 --> Merge
+    J2 --> Merge
+    J3 --> Merge
+```
 
 ### Partitioning & Shuffle
 
@@ -312,6 +345,53 @@ service ShuffleService {
 - **Fragment reassignment** — Failed fragments are reassigned to healthy workers
 - **Retry with backoff** — Transient failures retried with exponential backoff
 - **Partial result recovery** — Completed fragments are cached, only failed work is recomputed
+
+## HNSW Index Structure (Planned)
+
+For the upcoming AI/ML extensions (Phase 6), vkSQL will support HNSW (Hierarchical Navigable Small World) indexing for approximate nearest neighbor vector search:
+
+```mermaid
+flowchart TD
+    subgraph Layer2["Layer 2 (top — fewest nodes, long-range links)"]
+        L2A((A)) <--> L2D((D))
+        L2D <--> L2G((G))
+        L2A <--> L2G
+    end
+
+    subgraph Layer1["Layer 1 (middle — more nodes, medium links)"]
+        L1A((A)) <--> L1B((B))
+        L1B <--> L1D((D))
+        L1D <--> L1E((E))
+        L1E <--> L1G((G))
+        L1A <--> L1D
+        L1G <--> L1A
+    end
+
+    subgraph Layer0["Layer 0 (bottom — all nodes, short-range links)"]
+        L0A((A)) <--> L0B((B))
+        L0B <--> L0C((C))
+        L0C <--> L0D((D))
+        L0D <--> L0E((E))
+        L0E <--> L0F((F))
+        L0F <--> L0G((G))
+        L0A <--> L0C
+        L0B <--> L0D
+        L0C <--> L0E
+        L0D <--> L0F
+        L0E <--> L0G
+    end
+
+    L2A -.->|"enter"| L1A
+    L2D -.-> L1D
+    L2G -.-> L1G
+    L1A -.-> L0A
+    L1B -.-> L0B
+    L1D -.-> L0D
+    L1E -.-> L0E
+    L1G -.-> L0G
+```
+
+> Search begins at the top layer with long-range jumps, then descends to lower layers for finer-grained navigation. Each layer is a navigable small-world graph with increasing density.
 
 ## Performance Optimizations
 

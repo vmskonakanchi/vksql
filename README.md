@@ -4,32 +4,32 @@ A distributed analytical query engine built from scratch in Java 21 — columnar
 
 ## Architecture
 
+### Query Processing Pipeline
+
+```mermaid
+flowchart LR
+    A[SQL] --> B[Parser<br/>ANTLR4]
+    B --> C[Logical Plan]
+    C --> D[Optimizer]
+    D --> E[Physical Plan]
+    E --> F[Vectorized Executor<br/>batch processing]
+    F --> G[Columnar Storage<br/>custom .vkql format]
 ```
-                            ┌─────────────────────────────────────────────┐
-                            │            Distributed Path                  │
-                            │                                             │
-                            │   ┌─────────────┐    ┌─────────────────┐   │
-                            │   │ Coordinator │───▶│  Worker Nodes   │   │
-                            │   └─────────────┘    │  (gRPC shuffle) │   │
-                            │         │            └─────────────────┘   │
-                            └─────────┼───────────────────────────────────┘
-                                      │
-┌──────┐    ┌────────┐    ┌───────────▼───┐    ┌───────────┐    ┌──────────┐
-│  SQL │───▶│ Parser │───▶│ Logical Plan  │───▶│ Optimizer │───▶│ Physical │
-└──────┘    │(ANTLR4)│    │               │    │           │    │   Plan   │
-            └────────┘    └───────────────┘    └───────────┘    └────┬─────┘
-                                                                     │
-                                                                     ▼
-                                                          ┌─────────────────────┐
-                                                          │ Vectorized Executor │
-                                                          │  (batch processing) │
-                                                          └──────────┬──────────┘
-                                                                     │
-                                                                     ▼
-                                                          ┌─────────────────────┐
-                                                          │  Columnar Storage   │
-                                                          │ (custom .vkql fmt)  │
-                                                          └─────────────────────┘
+
+### Distributed Execution
+
+```mermaid
+flowchart TD
+    Client[Client] --> Coordinator
+    Coordinator --> W1[Worker 1]
+    Coordinator --> W2[Worker 2]
+    Coordinator --> W3[Worker N]
+    W1 <-->|gRPC shuffle| W2
+    W2 <-->|gRPC shuffle| W3
+    W1 <-->|gRPC shuffle| W3
+    W1 --> Coordinator
+    W2 --> Coordinator
+    W3 --> Coordinator
 ```
 
 ## Key Features
