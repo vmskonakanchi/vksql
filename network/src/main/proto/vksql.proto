@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package vksql;
+
+option java_package = "com.vksql.network.proto";
+option java_multiple_files = true;
+
+// ============ DATA MESSAGES ============
+
+// A column of data sent over the wire
+message ColumnData {
+    enum DataType {
+        INT32 = 0;
+        INT64 = 1;
+        FLOAT64 = 2;
+        STRING = 3;
+    }
+    DataType type = 1;
+    bytes values = 2;       // raw column bytes (same as on-disk format)
+    bytes null_bitmap = 3;  // 1 bit per value
+    int32 num_values = 4;
+}
+
+// A batch of rows in columnar format
+message RecordBatch {
+    repeated ColumnData columns = 1;
+    int32 num_rows = 2;
+}
+
+// ============ QUERY MESSAGES ============
+
+// A query to execute
+message QueryRequest {
+    string sql = 1;
+    string query_id = 2;
+}
+
+// Final result returned to client
+message QueryResult {
+    repeated RecordBatch batches = 1;
+    int64 rows_returned = 2;
+    int64 execution_time_ms = 3;
+}
+
+// ============ TASK MESSAGES ============
+
+// A task assigned to a worker (a piece of the query)
+message TaskRequest {
+    string query_id = 1;
+    string task_id = 2;
+    int32 stage_id = 3;
+
+    // What to execute
+    string table_name = 4;            // which table to scan
+    string filter_column = 5;         // predicate pushdown
+    string filter_operator = 6;
+    int64 filter_value = 7;
+
+    // Aggregation
+    string group_by_column = 8;
+    string aggregate_function = 9;    // "sum", "count", etc.
+    string aggregate_column = 10;
+
+    // Shuffle target (if output goes to another stage)
+    repeated string shuffle_targets = 11;  // host:port of downstream workers
+}
+
+// Result from a worker for one task
+message TaskResult {
+    string task_id = 1;
+    TaskStatus status = 2;
+    RecordBatch result = 3;           // final aggregated result
+    int64 rows_processed = 4;
+    int64 execution_time_ms = 5;
+}
+
+enum TaskStatus {
+    SUCCESS = 0;
+    FAILED = 1;
+    RUNNING = 2;
+}
+
+// ============ HEALTH ============
+
+message HeartbeatRequest {
+    string worker_id = 1;
+    int32 active_tasks = 2;
+}
+
+message HeartbeatResponse {
+    bool acknowledged = 1;
+}
+
+// ============ SERVICES ============
+
+// Client → Coordinator: submit queries
+service CoordinatorService {
+    rpc ExecuteQuery(QueryRequest) returns (QueryResult);
+}
+
+// Coordinator → Worker: assign tasks
+service WorkerService {
+    rpc ExecuteTask(TaskRequest) returns (TaskResult);
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// Worker → Worker: shuffle intermediate data
+service ShuffleService {
+    rpc PushBatch(stream RecordBatch) returns (ShuffleAck);
+}
+
+message ShuffleAck {
+    int64 batches_received = 1;
+}
