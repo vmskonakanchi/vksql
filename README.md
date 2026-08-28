@@ -47,14 +47,25 @@ A distributed analytical query engine built from scratch in Java 21 — columnar
 
 ## Performance
 
-Benchmark on 100M rows, single-node, Apple Silicon:
+Benchmarked on Apple M5 (10 cores), 16GB RAM, macOS 26.6.2, OpenJDK 21.0.12, ZGC.
+
+### Storage Engine (100M rows)
 
 | Metric | Throughput |
 |--------|-----------|
 | Single-thread scan + aggregate | **2.8 billion rows/sec** |
 | Parallel execution (all cores) | **4.5 billion rows/sec** |
 
-See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for detailed methodology and results.
+### TPC-H Queries (10M rows)
+
+| Query | Description | Throughput |
+|-------|-------------|------------|
+| Q1 | Pricing Summary (scan + group-by agg) | **86.2 M rows/sec** |
+| Q6 | Revenue Forecast (scan + filter + agg) | **67.1 M rows/sec** |
+| Q12 | Shipping Modes (hash join + group-by) | **95.2 M rows/sec** |
+| Q14 | Promotion Effect (hash join + computed agg) | **75.2 M rows/sec** |
+
+See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for detailed methodology, TPC-H coverage, and comparisons.
 
 ## Quick Start
 
