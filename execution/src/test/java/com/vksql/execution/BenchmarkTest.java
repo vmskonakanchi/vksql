@@ -167,4 +167,40 @@ class BenchmarkTest {
         System.out.println("Throughput:     " + rowsPerSecMapped + " rows/sec");
         System.out.println("                " + (rowsPerSecMapped / 1_000_000) + "M rows/sec");
     }
+
+    @Test
+    void benchmark_parallel_500K_rows() throws Exception {
+        Schema schema = new Schema(List.of(
+            new ColumnDescriptor("id", DataType.INT32, 0),
+            new ColumnDescriptor("price", DataType.INT64, 1),
+            new ColumnDescriptor("nation", DataType.INT32, 2)
+        ));
+
+        int numRows = 500_000;
+        Path filePath = tempDir.resolve("bench_parallel.vkql");
+
+        try (var writer = new VksqlFileWriter(filePath, schema)) {
+            for (int i = 0; i < numRows; i++) {
+                writer.writeRow(i, (long) (i % 500), i % 10);
+            }
+        }
+
+        System.out.println("Running PARALLEL (" + Runtime.getRuntime().availableProcessors() + " cores): SELECT nation, sum(price) WHERE price > 250 GROUP BY nation");
+
+        long execStart = System.nanoTime();
+
+        var executor = new com.vksql.execution.vectorized.ParallelQueryExecutor(filePath, schema);
+        var result = executor.parallelFilterAggregate(1, 250, 2, 1);
+
+        long execMs = (System.nanoTime() - execStart) / 1_000_000;
+        long rowsPerSecParallel = numRows * 1000L / Math.max(execMs, 1);
+
+        System.out.println("\n=== BENCHMARK RESULTS (Parallel + Mapped + Vectorized) ===");
+        System.out.println("Rows processed: " + numRows);
+        System.out.println("Result groups:  " + result.size());
+        System.out.println("Execution time: " + execMs + " ms");
+        System.out.println("Throughput:     " + rowsPerSecParallel + " rows/sec");
+        System.out.println("                " + (rowsPerSecParallel / 1_000_000) + "M rows/sec");
+        System.out.println("Cores used:     " + Runtime.getRuntime().availableProcessors());
+    }
 }
