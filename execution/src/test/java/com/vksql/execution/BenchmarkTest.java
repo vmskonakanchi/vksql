@@ -203,4 +203,62 @@ class BenchmarkTest {
         System.out.println("                " + (rowsPerSecParallel / 1_000_000) + "M rows/sec");
         System.out.println("Cores used:     " + Runtime.getRuntime().availableProcessors());
     }
+
+    @Test
+    void benchmark_predicatePushdown_10M_rows() throws Exception {
+        Schema schema = new Schema(List.of(
+            new ColumnDescriptor("id", DataType.INT32, 0),
+            new ColumnDescriptor("price", DataType.INT64, 1),
+            new ColumnDescriptor("nation", DataType.INT32, 2)
+        ));
+
+        int numRows = 10_000_000;
+        Path filePath = tempDir.resolve("bench_pushdown.vkql");
+
+        // Write 10M rows — price = i % 1000, so each row group (1M rows) has prices 0-999
+        // EXCEPT the last group where we'll have some high values
+        try (var writer = new VksqlFileWriter(filePath, schema)) {
+            for (int i = 0; i < numRows; i++) {
+                // Last 1M rows: price goes from 900 to 1899 (some > 1000)
+                long price = (i >= 9_000_000) ? (900L + (i % 1000)) : (long) (i % 1000);
+                writer.writeRow(i, price, i % 10);
+            }
+        }
+
+        // Query: WHERE price > 1000
+        // Row groups 0-8 have max(price)=999 → all skipped!
+        // Row group 9 has max(price)=1899 → must read
+        System.out.println("\nRunning PUSHDOWN: WHERE price > 1000 (selective — should skip most row groups)");
+
+        long execStart = System.nanoTime();
+
+        var scan = new com.vksql.execution.vectorized.PushdownScanOperator(
+            filePath, schema, "price", ">", 1000);
+        var filter = new com.vksql.execution.vectorized.VectorizedFilterOperator(scan,
+            new ComparisonExpr(new ColumnRef("price"), ">", new IntLiteral(1000)),
+            schema);
+        var aggregate = new com.vksql.execution.vectorized.VectorizedHashAggregateOperator(
+            filter, schema, 2, 1, "sum");
+
+        aggregate.open();
+        int resultCount = 0;
+        com.vksql.execution.vectorized.RecordBatch batch;
+        while ((batch = aggregate.next()) != null) {
+            resultCount += batch.rowCount();
+        }
+        aggregate.close();
+
+        long execMs = (System.nanoTime() - execStart) / 1_000_000;
+        long rowsPerSec = numRows * 1000L / Math.max(execMs, 1);
+
+        System.out.println("\n=== BENCHMARK RESULTS (Predicate Pushdown) ===");
+        System.out.println("Total rows in file:  " + numRows);
+        System.out.println("Row groups total:    " + scan.getTotalRowGroups());
+        System.out.println("Row groups SKIPPED:  " + scan.getSkippedRowGroups());
+        System.out.println("Row groups read:     " + (scan.getTotalRowGroups() - scan.getSkippedRowGroups()));
+        System.out.println("Execution time:      " + execMs + " ms");
+        System.out.println("Effective throughput: " + rowsPerSec + " rows/sec");
+        System.out.println("                     " + (rowsPerSec / 1_000_000) + "M rows/sec");
+        System.out.println("Data skipped:        " + (scan.getSkippedRowGroups() * 100 / scan.getTotalRowGroups()) + "%");
+    }
 }
