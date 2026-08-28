@@ -96,6 +96,7 @@ Requires **Java 21+** and **Gradle 9.7+** (wrapper included).
 | `parser` | SQL parsing via ANTLR4 — lexer, parser, AST generation, visitor pattern for plan building |
 | `execution` | Vectorized batch execution engine — operators (scan, filter, project, join, aggregate), RecordBatch, expression evaluation |
 | `network` | gRPC-based distributed execution — protobuf schemas, shuffle service, coordinator/worker protocol, partition assignment |
+| `vector` | Vector search — brute-force KNN, HNSW approximate nearest neighbor index, L2/cosine/dot-product distance |
 
 ## Tech Stack
 
@@ -116,8 +117,8 @@ Requires **Java 21+** and **Gradle 9.7+** (wrapper included).
 - [x] **Phase 2** — Query execution engine (operators, vectorized batches, hash join/aggregate)
 - [x] **Phase 3** — SQL parser (ANTLR4 grammar, AST, plan generation)
 - [x] **Phase 4** — Distributed execution (gRPC, coordinator/worker, shuffle, fault tolerance)
-- [ ] **Phase 5** — TPC-H benchmark suite (full query coverage)
-- [ ] **Phase 6** — AI/ML extensions (vector search, HNSW indexing)
+- [x] **Phase 5** — TPC-H benchmark suite (Q1, Q6, Q12, Q14)
+- [x] **Phase 6** — AI/ML extensions (vector search, HNSW indexing)
 
 ## Documentation
 
