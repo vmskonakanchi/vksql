@@ -13,6 +13,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -138,6 +139,115 @@ class ExecutionTest {
         System.out.println("=== SELECT price FROM orders WHERE price > 100 ===");
         for (Row r : results) {
             System.out.println("  price = " + r.get(0));
+        }
+    }
+
+    @Test
+    void hashAggregate_groupByWithSum() throws Exception {
+        // Schema: (nation STRING, price INT64)
+        Schema schema = new Schema(List.of(
+            new ColumnDescriptor("nation", DataType.STRING, 0),
+            new ColumnDescriptor("price", DataType.INT64, 1)
+        ));
+
+        Path filePath = tempDir.resolve("nations.vkql");
+        try (var writer = new VksqlFileWriter(filePath, schema)) {
+            writer.writeRow("USA", 100L);
+            writer.writeRow("UK",  200L);
+            writer.writeRow("USA", 150L);
+            writer.writeRow("UK",  50L);
+            writer.writeRow("USA", 50L);
+        }
+
+        // SELECT nation, sum(price) FROM nations GROUP BY nation
+        Operator scan = new ScanOperator(filePath, schema);
+        List<Expr> groupBy = List.of(new ColumnRef("nation"));
+        List<FunctionCall> aggs = List.of(new FunctionCall("sum", List.of(new ColumnRef("price"))));
+        Operator aggregate = new HashAggregateOperator(scan, schema, groupBy, aggs);
+
+        aggregate.open();
+        Map<Object, Long> results = new java.util.HashMap<>();
+        Row row;
+        while ((row = aggregate.next()) != null) {
+            results.put(row.get(0), (long) row.get(1));
+        }
+        aggregate.close();
+
+        assertEquals(2, results.size());
+        assertEquals(300L, results.get("USA"));  // 100 + 150 + 50
+        assertEquals(250L, results.get("UK"));   // 200 + 50
+
+        System.out.println("=== SELECT nation, sum(price) GROUP BY nation ===");
+        results.forEach((k, v) -> System.out.println("  " + k + " → " + v));
+    }
+
+    @Test
+    void hashJoin_ordersWithCustomers() throws Exception {
+        // Orders: (order_id INT32, cust_id INT32, price INT64)
+        Schema ordersSchema = new Schema(List.of(
+            new ColumnDescriptor("order_id", DataType.INT32, 0),
+            new ColumnDescriptor("cust_id", DataType.INT32, 1),
+            new ColumnDescriptor("price", DataType.INT64, 2)
+        ));
+
+        // Customers: (id INT32, name STRING)
+        Schema customersSchema = new Schema(List.of(
+            new ColumnDescriptor("id", DataType.INT32, 0),
+            new ColumnDescriptor("name", DataType.STRING, 1)
+        ));
+
+        Path ordersPath = tempDir.resolve("orders_join.vkql");
+        try (var writer = new VksqlFileWriter(ordersPath, ordersSchema)) {
+            writer.writeRow(101, 1, 500L);
+            writer.writeRow(102, 2, 300L);
+            writer.writeRow(103, 1, 200L);
+            writer.writeRow(104, 3, 100L);  // cust_id=3 has no customer → skipped
+        }
+
+        Path customersPath = tempDir.resolve("customers_join.vkql");
+        try (var writer = new VksqlFileWriter(customersPath, customersSchema)) {
+            writer.writeRow(1, "alice");
+            writer.writeRow(2, "bob");
+        }
+
+        // JOIN orders ON orders.cust_id = customers.id
+        Operator ordersScan = new ScanOperator(ordersPath, ordersSchema);
+        Operator customersScan = new ScanOperator(customersPath, customersSchema);
+        Operator join = new HashJoinOperator(
+            ordersScan, customersScan,
+            ordersSchema, customersSchema,
+            "cust_id", "id"
+        );
+
+        join.open();
+        List<Row> results = new ArrayList<>();
+        Row row;
+        while ((row = join.next()) != null) {
+            results.add(row);
+        }
+        join.close();
+
+        // Should get 3 rows (order 104 has no matching customer)
+        assertEquals(3, results.size());
+
+        // Each row has 5 columns: order_id, cust_id, price, id, name
+        assertEquals(5, results.get(0).columnCount());
+
+        // Order 101, cust_id=1, price=500, customer id=1, name=alice
+        assertEquals(101, results.get(0).get(0));
+        assertEquals("alice", results.get(0).get(4));
+
+        // Order 102, cust_id=2, price=300, customer id=2, name=bob
+        assertEquals(102, results.get(1).get(0));
+        assertEquals("bob", results.get(1).get(4));
+
+        // Order 103, cust_id=1, price=200, customer id=1, name=alice
+        assertEquals(103, results.get(2).get(0));
+        assertEquals("alice", results.get(2).get(4));
+
+        System.out.println("=== orders JOIN customers ON cust_id = id ===");
+        for (Row r : results) {
+            System.out.println("  " + r);
         }
     }
 
