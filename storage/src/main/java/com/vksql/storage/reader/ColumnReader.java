@@ -20,60 +20,101 @@ public class ColumnReader {
     }
 
     public ColumnData read() throws IOException {
-        raf.seek(cMetadata.fileOffSet()); // seek to the column chunk start
+        raf.seek(cMetadata.fileOffSet());
         byte[] raw = new byte[(int) cMetadata.totalSize()];
-        raf.readFully(raw); // column chunk bytes data
+        raf.readFully(raw);
         ByteBuffer buf = ByteBuffer.wrap(raw);
-
-        // deserialize the actual data and read the bitmap first
-        int bitMapSize = buf.getInt();
-        byte[] bitmapBytes = new byte[bitMapSize];
-        buf.get(bitmapBytes);
 
         int totalValues = (int) cMetadata.numValues();
         Object[] values = new Object[totalValues];
+        int valueIndex = 0;
 
-        if (dType == DataType.STRING) {
-            // String page layout after bitmap:
-            // [numStrings][offset_0][offset_1]...[offset_n][end_offset][string bytes]
-            int numStrings = buf.getInt();
-            int[] offsets = new int[numStrings + 1];
-            for (int i = 0; i <= numStrings; i++) {
-                offsets[i] = buf.getInt();
-            }
-            // remaining string bytes
-            byte[] stringData = new byte[offsets[numStrings]];
-            buf.get(stringData);
+        // Read page by page until we've read all values
+        while (valueIndex < totalValues && buf.hasRemaining()) {
+            // Each page starts with: [bitmapSize (4 bytes)][bitmap][data]
+            int bitmapSize = buf.getInt();
+            byte[] bitmapBytes = new byte[bitmapSize];
+            buf.get(bitmapBytes);
 
-            // reconstruct with nulls
-            int stringIndex = 0;
-            for (int i = 0; i < totalValues; i++) {
-                boolean isNull = (bitmapBytes[i / 8] & (1 << (i % 8))) == 0;
-                if (isNull) {
-                    values[i] = null;
-                } else {
-                    int start = offsets[stringIndex];
-                    int end = offsets[stringIndex + 1];
-                    values[i] = new String(stringData, start, end - start);
-                    stringIndex++;
+            if (dType == DataType.STRING) {
+                // String page: [numStrings][offsets...][end_offset][string bytes]
+                int numStrings = buf.getInt();
+                int[] offsets = new int[numStrings + 1];
+                for (int i = 0; i <= numStrings; i++) {
+                    offsets[i] = buf.getInt();
                 }
-            }
-        } else {
-            // Fixed-width types: INT32, INT64, FLOAT64
-            for (int i = 0; i < totalValues; i++) {
-                boolean isNull = (bitmapBytes[i / 8] & (1 << (i % 8))) == 0;
-                if (isNull) {
-                    values[i] = null;
-                } else {
-                    switch (dType) {
-                        case INT32 -> values[i] = buf.getInt();
-                        case INT64 -> values[i] = buf.getLong();
-                        case FLOAT64 -> values[i] = buf.getDouble();
+                byte[] stringData = new byte[offsets[numStrings]];
+                buf.get(stringData);
+
+                // Figure out how many total positions this page covers
+                int pageValues = bitmapSize * 8; // max values this bitmap can track
+                // But actual count is numStrings (non-null) + nulls
+                // We need to count from bitmap: total positions = find actual count
+                int pageTotal = countPageValues(bitmapBytes, bitmapSize, totalValues - valueIndex);
+
+                int stringIndex = 0;
+                for (int i = 0; i < pageTotal && valueIndex < totalValues; i++) {
+                    boolean isNull = (bitmapBytes[i / 8] & (1 << (i % 8))) == 0;
+                    if (isNull) {
+                        values[valueIndex] = null;
+                    } else {
+                        int start = offsets[stringIndex];
+                        int end = offsets[stringIndex + 1];
+                        values[valueIndex] = new String(stringData, start, end - start);
+                        stringIndex++;
                     }
+                    valueIndex++;
+                }
+            } else {
+                // Fixed-width page: values packed after bitmap
+                // Count how many values in this page by reading until next page or end
+                int pageStart = buf.position();
+                int bytesPerValue = switch (dType) {
+                    case INT32 -> 4;
+                    case INT64 -> 8;
+                    case FLOAT64 -> 8;
+                    default -> 4;
+                };
+
+                // Determine how many values this page has
+                // Count non-null bits to know how many data values are stored
+                int remaining = totalValues - valueIndex;
+                int bitmapCapacity = bitmapSize * 8;
+                int pageTotal = Math.min(bitmapCapacity, remaining);
+
+                // Count non-null values to know how much data to expect
+                int nonNullCount = 0;
+                for (int i = 0; i < pageTotal; i++) {
+                    if ((bitmapBytes[i / 8] & (1 << (i % 8))) != 0) {
+                        nonNullCount++;
+                    }
+                }
+
+                // Read values
+                for (int i = 0; i < pageTotal && valueIndex < totalValues; i++) {
+                    boolean isNull = (bitmapBytes[i / 8] & (1 << (i % 8))) == 0;
+                    if (isNull) {
+                        values[valueIndex] = null;
+                    } else {
+                        switch (dType) {
+                            case INT32 -> values[valueIndex] = buf.getInt();
+                            case INT64 -> values[valueIndex] = buf.getLong();
+                            case FLOAT64 -> values[valueIndex] = buf.getDouble();
+                        }
+                    }
+                    valueIndex++;
                 }
             }
         }
 
         return new ColumnData(values, null, totalValues);
+    }
+
+    /**
+     * Count actual values in a page from bitmap.
+     * The page might not use all bits in the last byte.
+     */
+    private int countPageValues(byte[] bitmap, int bitmapSize, int maxRemaining) {
+        return Math.min(bitmapSize * 8, maxRemaining);
     }
 }
