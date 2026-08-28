@@ -120,4 +120,51 @@ class BenchmarkTest {
         System.out.println("Throughput:     " + rowsPerSecVec + " rows/sec");
         System.out.println("                " + (rowsPerSecVec / 1_000_000) + "M rows/sec");
     }
+
+    @Test
+    void benchmark_mapped_vectorized_500K_rows() throws Exception {
+        Schema schema = new Schema(List.of(
+            new ColumnDescriptor("id", DataType.INT32, 0),
+            new ColumnDescriptor("price", DataType.INT64, 1),
+            new ColumnDescriptor("nation", DataType.INT32, 2)
+        ));
+
+        int numRows = 500_000;
+        Path filePath = tempDir.resolve("bench_mapped.vkql");
+
+        try (var writer = new VksqlFileWriter(filePath, schema)) {
+            for (int i = 0; i < numRows; i++) {
+                writer.writeRow(i, (long) (i % 500), i % 10);
+            }
+        }
+
+        System.out.println("Running MAPPED + VECTORIZED: SELECT nation, sum(price) WHERE price > 250 GROUP BY nation");
+
+        long execStart = System.nanoTime();
+
+        var scan = new com.vksql.execution.vectorized.MappedVectorizedScanOperator(filePath, schema);
+        var filter = new com.vksql.execution.vectorized.VectorizedFilterOperator(scan,
+            new ComparisonExpr(new ColumnRef("price"), ">", new IntLiteral(250)),
+            schema);
+        var aggregate = new com.vksql.execution.vectorized.VectorizedHashAggregateOperator(
+            filter, schema, 2, 1, "sum");
+
+        aggregate.open();
+        int resultCount = 0;
+        com.vksql.execution.vectorized.RecordBatch batch;
+        while ((batch = aggregate.next()) != null) {
+            resultCount += batch.rowCount();
+        }
+        aggregate.close();
+
+        long execMs = (System.nanoTime() - execStart) / 1_000_000;
+        long rowsPerSecMapped = numRows * 1000L / Math.max(execMs, 1);
+
+        System.out.println("\n=== BENCHMARK RESULTS (Mapped + Vectorized) ===");
+        System.out.println("Rows processed: " + numRows);
+        System.out.println("Result groups:  " + resultCount);
+        System.out.println("Execution time: " + execMs + " ms");
+        System.out.println("Throughput:     " + rowsPerSecMapped + " rows/sec");
+        System.out.println("                " + (rowsPerSecMapped / 1_000_000) + "M rows/sec");
+    }
 }

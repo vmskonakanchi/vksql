@@ -18,7 +18,12 @@ java {
     }
 }
 
+tasks.withType<JavaCompile> {
+    options.compilerArgs.add("--enable-preview")
+}
+
 tasks.test {
     useJUnitPlatform()
     maxHeapSize = "512m"
+    jvmArgs("--enable-preview")
 }
